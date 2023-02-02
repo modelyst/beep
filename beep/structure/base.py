@@ -634,7 +634,17 @@ class BEEPDatapath(abc.ABC, MSONable):
         for cycle_index in tqdm(cycle_indices, desc=desc):
             cycle_df = self.raw_data.loc[self.raw_data["cycle_index"] == cycle_index]
 
-            step_dfs = self.iterate_steps_in_cycle(cycle_df, step_type)
+            if "Nova" in self.paths["raw"].split("/")[-1] and set(cycle_df.step_index) == set([1, 2, 3, 5, 6, 7]):
+                charge_step_inds = set([1, 2, 5, 6, 7])
+                discharge_step_inds = set([3])
+                if step_type == "charge":
+                    step_dfs = [cycle_df[cycle_df.apply(lambda row: row['step_index'] in charge_step_inds, axis=1)]]
+                elif step_type == "discharge":
+                    step_dfs = [cycle_df[cycle_df.apply(lambda row: row['step_index'] in discharge_step_inds, axis=1)]]
+                else:
+                    raise ValueError(f"{step_type} must be either 'charge' or 'discharge'")
+            else:
+                step_dfs = self.iterate_steps_in_cycle(cycle_df, step_type)
 
             for step_df in step_dfs:
                 if step_df.size == 0:
@@ -1288,6 +1298,7 @@ def interpolate_df(
     # Merge interpolated and uninterpolated DFs to use pandas interpolation
     interpolated_df = interpolated_df.merge(df, how="outer", on=field_name, sort=True)
     interpolated_df = interpolated_df.set_index(field_name)
+    interpolated_df = interpolated_df[~interpolated_df.index.duplicated(keep='first')] # TODO: check that this is the right thing to do. Why has nobody else run into a duplicate x values error?
     interpolated_df = interpolated_df.interpolate("slinear")
 
     # Filter for only interpolated values
