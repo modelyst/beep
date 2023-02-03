@@ -1,4 +1,4 @@
-from typing import Iterable, Optional, Tuple, Dict
+from typing import Iterable, Tuple, Dict
 
 import pandas as pd
 from monty.json import MSONable
@@ -254,5 +254,3 @@ def legacy_conversion(diagnostic_available):
 
     """
     pass
-
-

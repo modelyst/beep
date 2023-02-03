@@ -6,7 +6,6 @@ import abc
 import json
 import copy
 import time
-import itertools
 
 import pandas as pd
 import numpy as np
@@ -20,7 +19,6 @@ from beep.conversion_schemas import (
     STRUCTURE_DTYPES,
 )
 
-from beep.utils import parameters_lookup
 from beep import logger, VALIDATION_SCHEMA_DIR
 from beep.structure.validate import SimpleValidator
 from beep.structure.diagnostic import DiagnosticConfig
@@ -647,7 +645,8 @@ class BEEPDatapath(abc.ABC, MSONable):
                 step_dfs = self.iterate_steps_in_cycle(cycle_df, step_type)
 
             for step_df in step_dfs:
-                if step_df.size == 0:
+
+                if step_df.size == 0 or step_df.shape[0] < 2:
                     continue
                 if axis in ["charge_capacity", "discharge_capacity"]:
                     axis_range = [self.raw_data[axis].min(),
@@ -659,6 +658,11 @@ class BEEPDatapath(abc.ABC, MSONable):
                 else:
                     raise ValueError(f"Axis {axis} not a valid step interpolation axis.")
 
+                if len(step_df.step_index.unique()) > 1:
+                    raise ValueError("Step DF has multiple step indices present!")
+
+                step_index = step_df.step_index.iloc[0]
+
                 step_df = interpolate_df(
                     step_df,
                     axis,
@@ -669,7 +673,11 @@ class BEEPDatapath(abc.ABC, MSONable):
 
                 step_df["cycle_index"] = cycle_index
                 step_df["step_type"] = step_type
-                step_df["step_type"] = step_df["step_type"].astype("category")
+                step_df["step_index"] = step_index
+
+                for c in ("step_type", "step_index"):
+                    step_df[c] = step_df[c].astype("category")
+
                 all_dfs.append(step_df)
 
         if not all_dfs:
@@ -1200,7 +1208,8 @@ class BEEPDatapath(abc.ABC, MSONable):
         else:
             return False
 
-    def iterate_steps_in_cycle(self, cycle_df, step_type):
+    @staticmethod
+    def iterate_steps_in_cycle(cycle_df, step_type):
         """
         For a given cycle df, return an inteable (or yield)
         individual dfs corresponding to step indices and charge step.
@@ -1218,17 +1227,18 @@ class BEEPDatapath(abc.ABC, MSONable):
                 charge/discharge step. Used downstream for interpolation.
 
         """
-
         if step_type == "discharge":
             step_filter = step_is_dchg
         elif step_type == "charge":
             step_filter = step_is_chg
         else:
-            raise ValueError("{} is not a recognized step type")
+            raise ValueError(f"'{step_type}' is not a recognized step type")
+        dfs_chgstate = cycle_df.groupby("step_index").filter(step_filter)
+        for _, step_df in dfs_chgstate.groupby("step_index"):
+            yield step_df
 
-        return [cycle_df.groupby("step_index").filter(step_filter)]
-
-    def _cast_dtypes(self, result, structure_dtypes_key):
+    @staticmethod
+    def _cast_dtypes(result, structure_dtypes_key):
         """Cast data types of a result dataframe to those specified by the structuring config.
 
         Args:
@@ -1330,12 +1340,35 @@ def step_is_chg_state(step_df, chg):
         (bool): True if step is the charge state specified.
     """
     cap = step_df[["charge_capacity", "discharge_capacity"]]
-    cap = cap.diff(axis=0).mean(axis=0).diff().iloc[-1]
+    total_cap_diffs = cap.max() - cap.min()
 
-    if chg:  # Charging
-        return cap < 0
-    else:  # Discharging
-        return cap > 0
+    cdiff = cap.diff(axis=0)
+    c_points_flagged = (cdiff / total_cap_diffs) > 0.99
+    cdiff = cdiff[~c_points_flagged]
+
+    avg_chg_delta = cdiff.mean(axis=0)["charge_capacity"]
+    avg_dchg_delta = cdiff.mean(axis=0)["discharge_capacity"]
+
+    if np.isnan(avg_chg_delta) and np.isnan(avg_dchg_delta):
+        is_charging = None
+    elif np.isnan(avg_chg_delta):
+        is_charging = avg_dchg_delta > 0
+    elif np.isnan(avg_dchg_delta):
+        is_charging = avg_chg_delta > 0
+    else:
+        if avg_chg_delta > avg_dchg_delta and avg_chg_delta > 0:
+            is_charging = True
+        elif avg_chg_delta < avg_dchg_delta and avg_dchg_delta > 0:
+            is_charging = False
+        else:
+            is_charging = None
+
+    # If the is_charging cannot be determined, return false
+    # regardless.
+    if is_charging is None:
+        return True
+    else:
+        return chg == is_charging
 
 
 def step_is_dchg(step_df):
