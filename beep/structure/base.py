@@ -631,21 +631,63 @@ class BEEPDatapath(abc.ABC, MSONable):
 
         for cycle_index in tqdm(cycle_indices, desc=desc):
             cycle_df = self.raw_data.loc[self.raw_data["cycle_index"] == cycle_index]
+            # For nova files with charge and discharge steps in the same cycle, we need to filter out the other step type
 
-            if "Nova" in self.paths["raw"].split("/")[-1] and set(cycle_df.step_index) == set([1, 2, 3, 5, 6, 7]):
-                charge_step_inds = set([1, 2, 5, 6, 7])
-                discharge_step_inds = set([3])
-                if step_type == "charge":
-                    step_dfs = [cycle_df[cycle_df.apply(lambda row: row['step_index'] in charge_step_inds, axis=1)]]
-                elif step_type == "discharge":
-                    step_dfs = [cycle_df[cycle_df.apply(lambda row: row['step_index'] in discharge_step_inds, axis=1)]]
-                else:
-                    raise ValueError(f"{step_type} must be either 'charge' or 'discharge'")
+            filename = self.paths["raw"].split("/")[-1]
+            if "Nova" in filename and "Regular" in filename:
+                file_type = "nova_regular"
+            elif 'SecondLife' in filename:
+                file_type = "second_life"
             else:
-                step_dfs = self.iterate_steps_in_cycle(cycle_df, step_type)
+                raise ValueError(f"Can only process Nova Regular files and Second Life files. Looking for ('Nova' and 'Regular') or 'SecondLife' in the filename, got: {filename}")
 
+            MALFORMED_STEPS = (frozenset((1,37,38)),)
+            cycle_steps = frozenset(cycle_df.step_index.unique())
+            if cycle_steps in MALFORMED_STEPS:
+                message = f"Malformed step found in cycle {cycle_index}. Found cycle with steps: {', '.join(map(str,cycle_steps))}"
+                logger.error(message)
+                raise ValueError(message)
+
+            # map of file_type to discharge step index
+            discharge_step_map = {
+                'nova_regular': 3,
+                'second_life':
+                [
+                    (set((1,2,3,5,6)), (6,)),
+                    (set((30,31,32,33,34,35,36)), (33,34,35,36)),
+                    (set((39,40,41,42,43)), (42,43)),
+                    (set((45,)), []),
+                ]
+            }
+            # determine the stepinds from the file_type and cycle_steps
+            if file_type == 'nova_regular':
+                discharge_step_inds = [discharge_step_map[file_type]]
+            elif file_type == 'second_life':
+                discharge_step_inds = None
+                for steps, discharge_step in discharge_step_map[file_type]:
+                    if cycle_steps.issubset(steps):
+                        discharge_step_inds = list(discharge_step)
+                        break
+                if discharge_step_inds is None:
+                    raise ValueError(f"Could not match steps for steps in second_life cycle for index {cycle_index} with steps {', '.join(map(str,cycle_steps))}")
+            else:
+                raise ValueError(f"File type {file_type} not recognized.")
+
+            # if discharging only look at cycle_index 3 otherwise ignore cycle_index 3
+            if step_type == "discharge":
+                cycle_df = cycle_df[cycle_df.step_index.isin(discharge_step_inds)]
+            elif step_type == "charge":
+                cycle_df = cycle_df[~cycle_df.step_index.isin(discharge_step_inds)]
+            else:
+                raise ValueError(f"Step type {step_type} not recognized.")
+            
+
+            
+            # NOTE the structure pipeline does interpolates over the discharge/charge steps of a cycle not individual steps
+            # removing the group by step_index code in the main branch 
+            step_dfs = [cycle_df]
+            # step_dfs = self.iterate_steps_in_cycle(cycle_df, step_type)
             for step_df in step_dfs:
-
                 if step_df.size == 0 or step_df.shape[0] < 2:
                     continue
                 if axis in ["charge_capacity", "discharge_capacity"]:
@@ -658,8 +700,9 @@ class BEEPDatapath(abc.ABC, MSONable):
                 else:
                     raise ValueError(f"Axis {axis} not a valid step interpolation axis.")
 
-                if len(step_df.step_index.unique()) > 1:
-                    raise ValueError("Step DF has multiple step indices present!")
+                # NOTE the structure pipeline does interpolates over the discharge/charge steps of a cycle not individual steps
+                # if len(step_df.step_index.unique()) > 1:
+                #     raise ValueError("Step DF has multiple step indices present!")
 
                 step_index = step_df.step_index.iloc[0]
 
