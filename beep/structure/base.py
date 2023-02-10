@@ -939,6 +939,10 @@ class BEEPDatapath(abc.ABC, MSONable):
         diag_data = self.raw_data.loc[self.raw_data["cycle_index"].isin(self.diagnostic.all_ix)]
         # diag_types = [self.diagnostic.cycle_to_type[cix] for cix in diag_data.cycle_index.unique()]
 
+        #  Check if there are any diagnostic cycles in the data and return None if not
+        if diag_data.shape[0] == 0:
+            return None
+
         # Counter to ensure non-contiguous repeats of step_index
         # within same cycle_index are grouped separately
         diag_data.loc[:, "step_index_counter"] = 0
@@ -1062,6 +1066,12 @@ class BEEPDatapath(abc.ABC, MSONable):
         diag_summary.columns = self._diag_summary_cols
 
         diag_summary = diag_summary[diag_summary.index.isin(self.diagnostic.all_ix)]
+        
+        # If there are no diagnostic cycles, return None
+        if diag_summary.empty:
+            logger.warning(f"self.diagnostic.all_ix: {self.diagnostic.all_ix}")
+            logger.warning("No diagnostic cycles found in data.")
+            return None
 
         diag_summary["coulombic_efficiency"] = (
             diag_summary["discharge_capacity"] / diag_summary["charge_capacity"]
