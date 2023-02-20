@@ -638,8 +638,10 @@ class BEEPDatapath(abc.ABC, MSONable):
                 file_type = "nova_regular"
             elif 'SecondLife' in filename:
                 file_type = "second_life"
+            elif "Nova" in filename and "Formation" in filename:
+                file_type = "nova_formation"
             else:
-                raise ValueError(f"Can only process Nova Regular files and Second Life files. Looking for ('Nova' and 'Regular') or 'SecondLife' in the filename, got: {filename}")
+                raise ValueError(f"Can only process Nova Regular, Second Life, and Nova Formation files. Looking for ('Nova' and 'Regular'), ('Nova' and 'Formation'), or 'SecondLife' in the filename, got: {filename}")
 
             MALFORMED_STEPS = (frozenset((1,37,38)),)
             cycle_steps = frozenset(cycle_df.step_index.unique())
@@ -657,6 +659,12 @@ class BEEPDatapath(abc.ABC, MSONable):
                     (set((30,31,32,33,34,35,36)), (33,34,35,36)),
                     (set((39,40,41,42,43)), (42,43)),
                     (set((45,)), []),
+                ],
+                'nova_formation':
+                [
+                    (set((0,1,2,7,8)), (2,)),
+                    (set((1,2)), (2,)),
+                    (set((9,10,)), []),
                 ]
             }
             # determine the stepinds from the file_type and cycle_steps
@@ -670,6 +678,16 @@ class BEEPDatapath(abc.ABC, MSONable):
                         break
                 if discharge_step_inds is None:
                     raise ValueError(f"Could not match steps for steps in second_life cycle for index {cycle_index} with steps {', '.join(map(str,cycle_steps))}")
+            elif file_type == 'nova_formation':
+                discharge_step_inds = None
+                found_match = False
+                for steps, discharge_step in discharge_step_map[file_type]:
+                    if cycle_steps.issubset(steps):
+                        discharge_step_inds = list(discharge_step)
+                        found_match = True
+                        break
+                if not found_match:
+                    raise ValueError(f"Could not match steps for steps in nova_formation cycle for index {cycle_index} with steps {', '.join(map(str,cycle_steps))}")
             else:
                 raise ValueError(f"File type {file_type} not recognized.")
 
