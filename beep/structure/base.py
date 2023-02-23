@@ -561,6 +561,21 @@ class BEEPDatapath(abc.ABC, MSONable):
             "discharge_axis": discharge_axis
         }
 
+    def get_file_type(self) -> str:
+        filename = self.paths["raw"].split("/")[-1]
+        if "Nova" in filename and "Regular" in filename:
+            file_type = "nova_regular"
+        elif 'SecondLife' in filename:
+            file_type = "second_life"
+        elif "Nova" in filename and "Formation" in filename:
+            file_type = "nova_formation"
+        elif "JAR" in filename and "Formation" in filename:
+            file_type = "jar_formation"
+        else:
+            raise ValueError(f"Can only process Nova Regular, Second Life, Nova Formation, and JAR Formation files. Looking for ('Nova' and 'Regular'), ('Nova' and 'Formation'), ('JAR' and 'Formation') or 'SecondLife' in the filename, got: {filename}")
+
+        return file_type
+
     @StructuringDecorators.must_not_be_legacy
     def unstructure(self):
         """
@@ -633,15 +648,7 @@ class BEEPDatapath(abc.ABC, MSONable):
             cycle_df = self.raw_data.loc[self.raw_data["cycle_index"] == cycle_index]
             # For nova files with charge and discharge steps in the same cycle, we need to filter out the other step type
 
-            filename = self.paths["raw"].split("/")[-1]
-            if "Nova" in filename and "Regular" in filename:
-                file_type = "nova_regular"
-            elif 'SecondLife' in filename:
-                file_type = "second_life"
-            elif "Nova" in filename and "Formation" in filename:
-                file_type = "nova_formation"
-            else:
-                raise ValueError(f"Can only process Nova Regular, Second Life, and Nova Formation files. Looking for ('Nova' and 'Regular'), ('Nova' and 'Formation'), or 'SecondLife' in the filename, got: {filename}")
+            file_type = self.get_file_type()
 
             MALFORMED_STEPS = (frozenset((1,37,38)),)
             cycle_steps = frozenset(cycle_df.step_index.unique())
@@ -1034,8 +1041,21 @@ class BEEPDatapath(abc.ABC, MSONable):
             steps = diag_data[diag_data.cycle_index == cycle].step_index.unique()
             diag_dict[cycle] = list(steps)
 
+        file_type = self.get_file_type()
+        if file_type == "nova_regular":
+            skip_inds = (1, 10)
+            cycle_0_data = diag_data[diag_data.cycle_index == 0]
+            step_1_data = cycle_0_data[cycle_0_data.step_index == 1]
+            offset = list(step_1_data.discharge_capacity)[-1]
+
         all_dfs = []
         for (cycle_index, step_index, step_index_counter), df in tqdm(group, desc="Interpolating diagnostic by step"):
+            if file_type == "nova_regular":
+                if step_index in skip_inds:
+                    continue
+                elif cycle_index == 0:
+                    df.discharge_capacity -= offset
+
             if len(df.index) < 2:
                 logger.debug(f"Skipping cycle: {cycle_index}, step: {step_index_counter} with step "
                              f"type: {step_index} as there were < 2 data points.")
